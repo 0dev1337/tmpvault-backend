@@ -1,4 +1,12 @@
 [server]
-
 host = "0.0.0.0"
 port = 8080
+
+[storage]
+base_path = "./storage/uploads"
+
+[expiry_paths]
+"1h" = "1h"
+"12h" = "12h"
+"24h" = "1d"
+"72h" = "3d"
