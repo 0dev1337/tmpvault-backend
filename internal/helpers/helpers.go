@@ -12,7 +12,7 @@ import (
 )
 
 func GetStoragePath(cfg *config.Config, expiry string) string {
-	sub, ok := config.Configuration.Expiry.Paths[expiry]
+	sub, ok := config.Configuration.Expiry[expiry]
 	if !ok {
 		sub = "default"
 	}
