@@ -1,16 +1,22 @@
 package upload
 
 import (
-	"github.com/0dev1337/tmpvault-backend/internal/service"
+	"fmt"
+
+	"github.com/0dev1337/tmpvault-backend/internal/config"
+	"github.com/0dev1337/tmpvault-backend/internal/helpers"
+	"github.com/0dev1337/tmpvault-backend/pkg/logging"
 	"github.com/gofiber/fiber/v3"
 )
 
 func UploadHandler(c fiber.Ctx) error {
 
 	file, err := c.FormFile("file")
+	file.Filename = helpers.GenFileName(file.Filename)
 	if err != nil {
-		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
-			"error": "Failed to get file",
+		return c.Status(fiber.StatusBadRequest).JSON(UploadResponse{
+			Status: "error",
+			Error:  "File is required",
 		})
 	}
 
@@ -19,15 +25,20 @@ func UploadHandler(c fiber.Ctx) error {
 		expiry = "24h"
 	}
 
-	result, err := service.UploadFile(file, expiry)
-	if err != nil {
-		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
-			"error": "Failed to upload file",
+	if err = c.SaveFile(file, fmt.Sprintf("%s/%s/%s", config.Configuration.Storage.Path,
+		config.Configuration.Expiry.Paths[expiry], file.Filename)); err != nil {
+		logging.Logger.Error().Str("error", err.Error()).Msg("Failed to save file")
+		return c.Status(fiber.StatusInternalServerError).JSON(UploadResponse{
+			Status: "error",
+			Error:  "Failed to save file",
 		})
 	}
 
-	return c.JSON(fiber.Map{
-		"url": result,
+	return c.Status(200).JSON(UploadResponse{
+		URL: fmt.Sprintf("%s/%s%s", config.Configuration.Storage.Path,
+			config.Configuration.Expiry.Paths[expiry], file.Filename),
+		Expiry: expiry,
+		Status: "success",
 	})
 
 }
