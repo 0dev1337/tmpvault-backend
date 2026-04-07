@@ -13,13 +13,13 @@ import (
 func UploadHandler(c fiber.Ctx) error {
 
 	file, err := c.FormFile("file")
-	file.Filename = helpers.GenFileName(file.Filename)
 	if err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(UploadResponse{
 			Status: "error",
 			Error:  "File is required",
 		})
 	}
+	file.Filename = helpers.GenFileName(file.Filename)
 
 	expiry := c.FormValue("expiry")
 	if expiry == "" {
