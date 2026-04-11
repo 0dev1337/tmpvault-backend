@@ -70,5 +70,3 @@ func (c *Client) DB(name string) *Database {
 	}
 	return &Database{db: c.cli.Database(name)}
 }
-
-

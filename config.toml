@@ -13,5 +13,5 @@ base_path = "./storage/uploads"
 "72h" = "3d"
 
 [database]
-"mongodb_url" : ""
-"db_name" : ""
+"mongodb_url" = "mongodb://localhost:27017/"
+"db_name" = "tmpvault"

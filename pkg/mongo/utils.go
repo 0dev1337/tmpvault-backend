@@ -7,20 +7,21 @@ import (
 	"time"
 
 	"github.com/0dev1337/tmpvault-backend/internal/config"
+	"github.com/0dev1337/tmpvault-backend/pkg/logging"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
 var (
-	clientInstance *mongo.Client
-	clientOnce     sync.Once
+	MongoClient       *mongo.Client
+	clientOnce        sync.Once
+	UploadsCollection *mongo.Collection
 )
 
 // InitMongo initializes a global MongoDB client (singleton)
 func InitMongo() *mongo.Client {
 	clientOnce.Do(func() {
-		
 
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
@@ -36,27 +37,22 @@ func InitMongo() *mongo.Client {
 			log.Fatal("Mongo ping error:", err)
 		}
 
-		clientInstance = client
+		MongoClient = client
 		log.Println("MongoDB connected")
 	})
 
-	return clientInstance
+	return MongoClient
+}
+
+func SetupCollections() {
+	UploadsCollection = GetCollection("uploads")
+	logging.Logger.Info().Msg("Uploads collection setup complete")
 }
 
 // GetCollection helper
-func GetCollection(dbName, collectionName string) *mongo.Collection {
+func GetCollection(collectionName string) *mongo.Collection {
 	client := InitMongo()
-	return client.Database(dbName).Collection(collectionName)
-}
-
-// InsertOne document
-func InsertOne(ctx context.Context, collection *mongo.Collection, doc interface{}) (*mongo.InsertOneResult, error) {
-	return collection.InsertOne(ctx, doc)
-}
-
-// InsertMany documents
-func InsertMany(ctx context.Context, collection *mongo.Collection, docs []interface{}) (*mongo.InsertManyResult, error) {
-	return collection.InsertMany(ctx, docs)
+	return client.Database(config.Configuration.Database.DB).Collection(collectionName)
 }
 
 // FindOne document
@@ -96,8 +92,8 @@ func DeleteOne(ctx context.Context, collection *mongo.Collection, filter interfa
 
 // Disconnect MongoDB
 func Disconnect(ctx context.Context) {
-	if clientInstance != nil {
-		if err := clientInstance.Disconnect(ctx); err != nil {
+	if MongoClient != nil {
+		if err := MongoClient.Disconnect(ctx); err != nil {
 			log.Println("Error disconnecting MongoDB:", err)
 		}
 	}
