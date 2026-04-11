@@ -14,6 +14,7 @@ import (
 	"github.com/0dev1337/tmpvault-backend/pkg/logging"
 	"github.com/0dev1337/tmpvault-backend/pkg/mongo"
 	"github.com/gofiber/fiber/v3"
+	"github.com/gofiber/fiber/v3/middleware/cors"
 )
 
 func main() {
@@ -33,6 +34,11 @@ func main() {
 		BodyLimit: config.Configuration.Server.MaxUploadSize * 1024 * 1024,
 	})
 	app.Use(middleware.Logging)
+	app.Use(cors.New(cors.Config{
+		AllowOrigins: []string{"*"},
+		AllowHeaders: []string{"Origin", "Content-Type", "Accept", "Authorization"},
+		AllowMethods: []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
+	}))
 	routes.SetupRoutes(app)
 
 	addr := fmt.Sprintf("%s:%d", config.Configuration.Server.Host, config.Configuration.Server.Port)

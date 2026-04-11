@@ -7,6 +7,7 @@ import (
 
 	"github.com/0dev1337/tmpvault-backend/internal/config"
 	"github.com/0dev1337/tmpvault-backend/pkg/logging"
+	"go.mongodb.org/mongo-driver/bson"
 	mongodriver "go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
@@ -48,6 +49,16 @@ func SetupCollections() {
 	mu.Lock()
 	UploadsCollection = c.Database(config.Configuration.Database.DBName).Collection("uploads")
 	mu.Unlock()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	_, err := UploadsCollection.Indexes().CreateOne(ctx, mongodriver.IndexModel{
+		Keys: bson.D{{Key: "fingerprint", Value: 1}},
+	})
+	if err != nil {
+		logging.Logger.Warn().Err(err).Msg("mongo fingerprint index")
+	}
+
 	logging.Logger.Info().Msg("mongo collections ready")
 }
 
