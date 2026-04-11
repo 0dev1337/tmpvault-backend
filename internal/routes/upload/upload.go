@@ -2,7 +2,6 @@ package upload
 
 import (
 	"context"
-	"fmt"
 	"os"
 	"path/filepath"
 
@@ -82,11 +81,8 @@ func UploadHandler(c fiber.Ctx) error {
 		})
 	}
 
-	publicPath := filepath.Join(expirySubdir, file.Filename)
-	url := fmt.Sprintf("%s/%s", filepath.ToSlash(base), filepath.ToSlash(publicPath))
-
 	return c.Status(fiber.StatusOK).JSON(UploadResponse{
-		URL:    url,
+		ID:     file.Filename,
 		Expiry: expiry,
 		Status: "success",
 	})

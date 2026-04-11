@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/0dev1337/tmpvault-backend/pkg/mongo"
+	"go.mongodb.org/mongo-driver/bson"
 )
 
 // UploadRecord is the persisted shape for an uploaded file.
@@ -18,4 +19,11 @@ type UploadRecord struct {
 func SaveUpload(ctx context.Context, rec UploadRecord) error {
 	_, err := mongo.UploadsCollection.InsertOne(ctx, rec)
 	return err
+}
+
+// FindUpload finds one upload record by file_id.
+func FindUpload(ctx context.Context, file_id string) (UploadRecord, error) {
+	var rec UploadRecord
+	err := mongo.UploadsCollection.FindOne(ctx, bson.M{"file_id": file_id}).Decode(&rec)
+	return rec, err
 }
