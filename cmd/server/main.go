@@ -1,7 +1,11 @@
 package main
 
 import (
+	"context"
 	"fmt"
+	"os"
+	"os/signal"
+	"syscall"
 
 	"github.com/0dev1337/tmpvault-backend/internal/config"
 	"github.com/0dev1337/tmpvault-backend/internal/middleware"
@@ -13,19 +17,38 @@ import (
 )
 
 func main() {
-
 	if err := config.LoadConfig(); err != nil {
-		logging.Logger.Fatal().Str("error", err.Error()).Msg("Failed to load config")
+		logging.Logger.Fatal().Err(err).Msg("failed to load config")
 	}
-	logging.Logger.Info().Msg("Config loaded successfully")
-	// fmt.Println(helpers.GetStoragePath("1h"))
+	logging.Logger.Info().Msg("config loaded")
+
 	mongo.SetupCollections()
-	go service.CleanupServiceWorker()
+	defer func() { _ = mongo.Disconnect(context.Background()) }()
+
+	ctx, stopCleanup := context.WithCancel(context.Background())
+	defer stopCleanup()
+	go service.RunCleanupWorker(ctx)
+
 	app := fiber.New(fiber.Config{
 		BodyLimit: config.Configuration.Server.MaxUploadSize * 1024 * 1024,
 	})
 	app.Use(middleware.Logging)
 	routes.SetupRoutes(app)
-	app.Listen(fmt.Sprintf("%s:%d", config.Configuration.Server.Host, config.Configuration.Server.Port))
 
+	addr := fmt.Sprintf("%s:%d", config.Configuration.Server.Host, config.Configuration.Server.Port)
+
+	go func() {
+		if err := app.Listen(addr); err != nil {
+			logging.Logger.Error().Err(err).Msg("http server exited")
+		}
+	}()
+
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, os.Interrupt, syscall.SIGTERM)
+	<-quit
+
+	stopCleanup()
+	if err := app.Shutdown(); err != nil {
+		logging.Logger.Error().Err(err).Msg("graceful shutdown")
+	}
 }

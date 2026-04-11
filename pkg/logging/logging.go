@@ -2,10 +2,11 @@ package logging
 
 import (
 	"fmt"
-	"github.com/rs/zerolog"
-	"github.com/rs/zerolog/log"
 	"os"
 	"time"
+
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
 )
 
 var (
@@ -19,17 +20,18 @@ func init() {
 	}
 
 	logConfig.FormatLevel = func(i interface{}) string {
-		if i == "info" {
+		switch i {
+		case "info":
 			return "\x1b[38;5;120mINF\x1b[0m \x1b[38;5;239m>\x1b[0m"
-		} else if i == "debug" {
+		case "debug":
 			return "\x1b[38;5;221mDBG\x1b[0m \x1b[38;5;239m>\x1b[0m"
-		} else if i == "warn" {
+		case "warn":
 			return "\x1b[38;5;203mWRN\x1b[0m \x1b[38;5;239m>\x1b[0m"
-		} else if i == "error" {
+		case "error":
 			return "\033[1m\x1b[38;5;203mWRN\x1b[0m\033[0m \x1b[38;5;239m>\x1b[0m"
-		} else if i == "fatal" {
+		case "fatal":
 			return "\033[1m\x1b[38;5;209mFTL\x1b[0m\033[0m \x1b[38;5;239m>\x1b[0m"
-		} else {
+		default:
 			return i.(string)
 		}
 	}

@@ -7,8 +7,10 @@ import (
 var Configuration *Config
 
 func LoadConfig() error {
-	if _, err := toml.DecodeFile("config.toml", &Configuration); err != nil {
+	var cfg Config
+	if _, err := toml.DecodeFile("config.toml", &cfg); err != nil {
 		return err
 	}
+	Configuration = &cfg
 	return nil
 }

@@ -8,20 +8,9 @@ import (
 	"time"
 
 	gonanoid "github.com/matoous/go-nanoid/v2"
-
-	"github.com/0dev1337/tmpvault-backend/internal/config"
 )
 
-func GetStoragePath(cfg *config.Config, expiry string) string {
-	sub, ok := config.Configuration.Expiry[expiry]
-	if !ok {
-		sub = "default"
-	}
-
-	return filepath.Join(config.Configuration.Storage.Path, sub)
-}
-
-// ParseExpiryDuration parses strings like "1h", "30m", "24h", or "1d"/"3d" (days).
+// ParseExpiryDuration parses values like "1h", "30m", "24h", or "1d"/"3d" (days).
 func ParseExpiryDuration(s string) (time.Duration, error) {
 	s = strings.TrimSpace(s)
 	if s == "" {
@@ -47,19 +36,15 @@ func ExpiryToUnix(expiry string) (int64, error) {
 	return time.Now().Add(d).Unix(), nil
 }
 
-func ParseExpiry(input string) time.Time {
-	d, err := ParseExpiryDuration(input)
-	if err != nil {
-		return time.Now()
-	}
-	return time.Now().Add(d)
-}
-
+// GenFileName returns a unique filename preserving extension.
 func GenFileName(original string) string {
 	ext := strings.ToLower(filepath.Ext(original))
 	if ext == "" {
-		ext = ".bin" // fallback
+		ext = ".bin"
 	}
-	id, _ := gonanoid.New(10)
-	return fmt.Sprintf("%s%s", id, ext)
+	id, err := gonanoid.New(10)
+	if err != nil || id == "" {
+		id = strconv.FormatInt(time.Now().UnixNano(), 36)
+	}
+	return id + ext
 }

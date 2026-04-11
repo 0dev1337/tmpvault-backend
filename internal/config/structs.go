@@ -20,5 +20,5 @@ type Storage struct {
 
 type Database struct {
 	MongoURI string `toml:"mongodb_url"`
-	DB string `toml:"db_name"`
+	DBName   string `toml:"db_name"`
 }

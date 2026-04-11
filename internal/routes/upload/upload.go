@@ -1,8 +1,10 @@
 package upload
 
 import (
+	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"github.com/0dev1337/tmpvault-backend/internal/config"
 	"github.com/0dev1337/tmpvault-backend/internal/database"
@@ -11,15 +13,16 @@ import (
 	"github.com/gofiber/fiber/v3"
 )
 
+// UploadHandler accepts multipart file upload and stores metadata in MongoDB.
 func UploadHandler(c fiber.Ctx) error {
-
 	file, err := c.FormFile("file")
 	if err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(UploadResponse{
 			Status: "error",
-			Error:  "File is required",
+			Error:  "file is required",
 		})
 	}
+
 	originalName := file.Filename
 	file.Filename = helpers.GenFileName(file.Filename)
 
@@ -27,44 +30,64 @@ func UploadHandler(c fiber.Ctx) error {
 	if expiry == "" {
 		expiry = "24h"
 	}
+	expirySubdir, ok := config.Configuration.Expiry[expiry]
+	if !ok {
+		return c.Status(fiber.StatusBadRequest).JSON(UploadResponse{
+			Status: "error",
+			Error:  "unknown expiry option",
+		})
+	}
+
 	expiryUnix, err := helpers.ExpiryToUnix(expiry)
 	if err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(UploadResponse{
 			Status: "error",
-			Error:  "Invalid expiry value",
+			Error:  "invalid expiry value",
 		})
 	}
 
-	saveDir := fmt.Sprintf("%s/%s", config.Configuration.Storage.Path, config.Configuration.Expiry[expiry])
-	savePath := fmt.Sprintf("%s/%s", saveDir, file.Filename)
-	if err := os.MkdirAll(saveDir, os.ModePerm); err != nil {
-		logging.Logger.Error().Str("error", err.Error()).Msg("Failed to create directory")
+	base := config.Configuration.Storage.Path
+	saveDir := filepath.Join(base, expirySubdir)
+	savePath := filepath.Join(saveDir, file.Filename)
+
+	if err := os.MkdirAll(saveDir, 0o755); err != nil {
+		logging.Logger.Error().Err(err).Msg("create storage directory")
 		return c.Status(fiber.StatusInternalServerError).JSON(UploadResponse{
 			Status: "error",
-			Error:  "Failed to create storage directory",
+			Error:  "failed to create storage directory",
 		})
 	}
 
 	if err = c.SaveFile(file, savePath); err != nil {
-		logging.Logger.Error().Str("error", err.Error()).Msg("Failed to save file")
+		logging.Logger.Error().Err(err).Msg("save upload")
 		return c.Status(fiber.StatusInternalServerError).JSON(UploadResponse{
 			Status: "error",
-			Error:  "Failed to save file",
+			Error:  "failed to save file",
 		})
 	}
-	err = database.UploadDatabase(file.Filename, originalName, savePath, expiryUnix)
-	if err != nil {
-		logging.Logger.Error().Str("error", err.Error()).Msg("Failed to upload file to database")
+
+	ctx := context.Background()
+	rec := database.UploadRecord{
+		FileID:   file.Filename,
+		FileName: originalName,
+		FilePath: savePath,
+		Expiry:   expiryUnix,
+	}
+	if err := database.SaveUpload(ctx, rec); err != nil {
+		logging.Logger.Error().Err(err).Msg("persist upload metadata")
+		_ = os.Remove(savePath)
 		return c.Status(fiber.StatusInternalServerError).JSON(UploadResponse{
 			Status: "error",
-			Error:  "Failed to upload file to database",
+			Error:  "failed to save upload metadata",
 		})
 	}
-	return c.Status(200).JSON(UploadResponse{
-		URL: fmt.Sprintf("%s/%s%s", config.Configuration.Storage.Path,
-			config.Configuration.Expiry[expiry], file.Filename),
+
+	publicPath := filepath.Join(expirySubdir, file.Filename)
+	url := fmt.Sprintf("%s/%s", filepath.ToSlash(base), filepath.ToSlash(publicPath))
+
+	return c.Status(fiber.StatusOK).JSON(UploadResponse{
+		URL:    url,
 		Expiry: expiry,
 		Status: "success",
 	})
-
 }

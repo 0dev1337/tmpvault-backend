@@ -11,29 +11,50 @@ import (
 	"go.mongodb.org/mongo-driver/bson"
 )
 
-func CleanupService() {
-
-	records, err := mongo.UploadsCollection.Find(context.Background(), bson.M{"expiry": bson.M{"$lt": time.Now().Unix()}})
-	if err != nil {
-		logging.Logger.Error().Str("error", err.Error()).Msg("Failed to find records")
+// RunCleanupOnce deletes expired uploads from disk and removes their MongoDB documents.
+func RunCleanupOnce(ctx context.Context) {
+	if mongo.UploadsCollection == nil {
 		return
 	}
-	for records.Next(context.Background()) {
-		var record database.UploadRecord
-		if err := records.Decode(&record); err != nil {
-			logging.Logger.Error().Str("error", err.Error()).Msg("Failed to decode record")
+	now := time.Now().Unix()
+	cur, err := mongo.UploadsCollection.Find(ctx, bson.M{"expiry": bson.M{"$lt": now}})
+	if err != nil {
+		logging.Logger.Error().Err(err).Msg("cleanup: find expired uploads")
+		return
+	}
+	defer func() { _ = cur.Close(ctx) }()
+
+	for cur.Next(ctx) {
+		var rec database.UploadRecord
+		if err := cur.Decode(&rec); err != nil {
+			logging.Logger.Error().Err(err).Msg("cleanup: decode record")
 			continue
 		}
-		os.Remove(record.FilePath)
-		mongo.UploadsCollection.DeleteOne(context.Background(), bson.M{"file_id": record.FileID})
-		logging.Logger.Info().Str("file_id", record.FileID).Msg("Deleted file from database")
+		if err := os.Remove(rec.FilePath); err != nil && !os.IsNotExist(err) {
+			logging.Logger.Error().Err(err).Str("path", rec.FilePath).Msg("cleanup: remove file")
+		}
+		if _, err := mongo.UploadsCollection.DeleteOne(ctx, bson.M{"file_id": rec.FileID}); err != nil {
+			logging.Logger.Error().Err(err).Str("file_id", rec.FileID).Msg("cleanup: delete document")
+			continue
+		}
+		logging.Logger.Info().Str("file_id", rec.FileID).Msg("cleanup: removed expired upload")
 	}
-	logging.Logger.Info().Msg("Cleanup service completed")
+	if err := cur.Err(); err != nil {
+		logging.Logger.Error().Err(err).Msg("cleanup: cursor")
+	}
 }
 
-func CleanupServiceWorker() {
+// RunCleanupWorker periodically runs RunCleanupOnce until ctx is cancelled.
+func RunCleanupWorker(ctx context.Context) {
+	RunCleanupOnce(ctx)
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
 	for {
-		CleanupService()
-		time.Sleep(30 * time.Second)
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			RunCleanupOnce(ctx)
+		}
 	}
 }
