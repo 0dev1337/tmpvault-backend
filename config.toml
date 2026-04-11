@@ -11,3 +11,7 @@ base_path = "./storage/uploads"
 "12h" = "12h"
 "24h" = "1d"
 "72h" = "3d"
+
+[database]
+"mongodb_url" : ""
+"db_name" : ""

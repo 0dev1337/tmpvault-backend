@@ -4,6 +4,7 @@ type Config struct {
 	Server  Server            `toml:"server"`
 	Expiry  map[string]string `toml:"expiry_paths"`
 	Storage Storage           `toml:"storage"`
+	Database Database         `toml:"database"`
 }
 
 type Server struct {
@@ -14,4 +15,10 @@ type Server struct {
 
 type Storage struct {
 	Path string `toml:"base_path"`
+}
+
+
+type Database struct {
+	MongoURI string `toml:"mongodb_url"`
+	DB string `toml:"db_name"`
 }
