@@ -2,6 +2,10 @@ package upload
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
+	"io"
 	"os"
 	"path/filepath"
 
@@ -10,6 +14,7 @@ import (
 	"github.com/0dev1337/tmpvault-backend/internal/helpers"
 	"github.com/0dev1337/tmpvault-backend/pkg/logging"
 	"github.com/gofiber/fiber/v3"
+	mongodriver "go.mongodb.org/mongo-driver/mongo"
 )
 
 // UploadHandler accepts multipart file upload and stores metadata in MongoDB.
@@ -57,20 +62,70 @@ func UploadHandler(c fiber.Ctx) error {
 		})
 	}
 
-	if err = c.SaveFile(file, savePath); err != nil {
-		logging.Logger.Error().Err(err).Msg("save upload")
+	src, err := file.Open()
+	if err != nil {
+		logging.Logger.Error().Err(err).Msg("open upload")
+		return c.Status(fiber.StatusBadRequest).JSON(UploadResponse{
+			Status: "error",
+			Error:  "failed to read file",
+		})
+	}
+	defer src.Close()
+
+	dst, err := os.Create(savePath)
+	if err != nil {
+		logging.Logger.Error().Err(err).Msg("create upload file")
 		return c.Status(fiber.StatusInternalServerError).JSON(UploadResponse{
 			Status: "error",
 			Error:  "failed to save file",
 		})
 	}
 
+	h := sha256.New()
+	if _, err := io.Copy(io.MultiWriter(dst, h), src); err != nil {
+		_ = dst.Close()
+		_ = os.Remove(savePath)
+		logging.Logger.Error().Err(err).Msg("save upload")
+		return c.Status(fiber.StatusInternalServerError).JSON(UploadResponse{
+			Status: "error",
+			Error:  "failed to save file",
+		})
+	}
+	if err := dst.Close(); err != nil {
+		_ = os.Remove(savePath)
+		logging.Logger.Error().Err(err).Msg("close upload file")
+		return c.Status(fiber.StatusInternalServerError).JSON(UploadResponse{
+			Status: "error",
+			Error:  "failed to save file",
+		})
+	}
+
+	fingerprint := hex.EncodeToString(h.Sum(nil))
 	ctx := context.Background()
+
+	existing, err := database.FindUploadByFingerprint(ctx, fingerprint)
+	if err == nil {
+		_ = os.Remove(savePath)
+		return c.Status(fiber.StatusOK).JSON(UploadResponse{
+			ID:     existing.FileID,
+			Status: "success",
+		})
+	}
+	if !errors.Is(err, mongodriver.ErrNoDocuments) {
+		logging.Logger.Error().Err(err).Msg("fingerprint lookup")
+		_ = os.Remove(savePath)
+		return c.Status(fiber.StatusInternalServerError).JSON(UploadResponse{
+			Status: "error",
+			Error:  "failed to check existing upload",
+		})
+	}
+
 	rec := database.UploadRecord{
-		FileID:   file.Filename,
-		FileName: originalName,
-		FilePath: savePath,
-		Expiry:   expiryUnix,
+		FileID:      file.Filename,
+		FileName:    originalName,
+		FilePath:    savePath,
+		Expiry:      expiryUnix,
+		Fingerprint: fingerprint,
 	}
 	if err := database.SaveUpload(ctx, rec); err != nil {
 		logging.Logger.Error().Err(err).Msg("persist upload metadata")
