@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 
 	"github.com/0dev1337/tmpvault-backend/internal/config"
 	"github.com/0dev1337/tmpvault-backend/internal/database"
@@ -28,7 +29,27 @@ func UploadHandler(c fiber.Ctx) error {
 	}
 
 	originalName := file.Filename
-	file.Filename = helpers.GenFileName(file.Filename)
+	fileNameLength := 0
+	fileNameLengthRaw := c.FormValue("file_name_length")
+	if fileNameLengthRaw != "" {
+		parsedLength, err := strconv.Atoi(fileNameLengthRaw)
+		if err != nil || parsedLength < 1 {
+			return c.Status(fiber.StatusBadRequest).JSON(UploadResponse{
+				Status: "error",
+				Error:  "file_name_length must be a positive integer",
+			})
+		}
+		fileNameLength = parsedLength
+	}
+
+	generatedName, err := helpers.GenFileNameWithLength(file.Filename, fileNameLength)
+	if err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(UploadResponse{
+			Status: "error",
+			Error:  err.Error(),
+		})
+	}
+	file.Filename = generatedName
 
 	expiry := c.FormValue("expiry")
 	if expiry == "" {
