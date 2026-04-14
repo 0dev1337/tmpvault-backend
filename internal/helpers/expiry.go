@@ -58,7 +58,7 @@ func GenFileName(original string) string {
 }
 
 // GenFileNameWithLength returns a unique filename preserving extension and
-// matching the requested total file ID length (including extension).
+// matching the requested random name length (excluding extension).
 func GenFileNameWithLength(original string, fileIDLength int) (string, error) {
 	ext := strings.ToLower(filepath.Ext(original))
 	if ext == "" {
@@ -67,10 +67,7 @@ func GenFileNameWithLength(original string, fileIDLength int) (string, error) {
 
 	idLength := defaultGeneratedIDLength
 	if fileIDLength > 0 {
-		idLength = fileIDLength - len(ext)
-		if idLength < 1 {
-			return "", fmt.Errorf("file_name_length must be greater than extension length")
-		}
+		idLength = fileIDLength
 	}
 
 	id, err := gonanoid.New(idLength)

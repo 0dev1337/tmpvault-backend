@@ -48,7 +48,7 @@ Base URL examples below assume `host = "0.0.0.0"` and `port = 8080`.
 - **Fields:**
   - **`file`** (required): the file to store.
   - **`expiry`** (optional): must match a key in `[expiry_paths]`; defaults to **`24h`** if omitted.
-  - **`file_name_length`** (optional): total length for generated file ID (including extension), must be a positive integer and long enough to include the extension.
+  - **`file_name_length`** (optional): random-name length before extension (e.g. `8` -> `Ab12Cd34.csv`), must be a positive integer.
 
 **Success (200):**
 
