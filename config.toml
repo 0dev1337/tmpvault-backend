@@ -5,6 +5,11 @@ max_upload_limit = 400
 read_timeout_seconds = 900
 write_timeout_seconds = 60
 idle_timeout_seconds = 60
+# Chunk size for the chunked upload flow (/api/v1/upload/init + chunk +
+# complete). Keep this comfortably under any reverse proxy's per-request
+# body cap in front of this server, e.g. Cloudflare's 100MB limit on
+# Free/Pro/Business plans.
+chunk_size_mb = 40
 
 [storage]
 base_path = "./storage/uploads"

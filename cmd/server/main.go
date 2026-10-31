@@ -11,6 +11,7 @@ import (
 	"github.com/0dev1337/tmpvault-backend/internal/config"
 	"github.com/0dev1337/tmpvault-backend/internal/middleware"
 	"github.com/0dev1337/tmpvault-backend/internal/routes"
+	"github.com/0dev1337/tmpvault-backend/internal/routes/upload"
 	"github.com/0dev1337/tmpvault-backend/internal/service"
 	"github.com/0dev1337/tmpvault-backend/pkg/logging"
 	"github.com/0dev1337/tmpvault-backend/pkg/mongo"
@@ -38,6 +39,7 @@ func main() {
 	ctx, stopCleanup := context.WithCancel(context.Background())
 	defer stopCleanup()
 	go service.RunCleanupWorker(ctx)
+	go upload.StartSessionJanitor(ctx)
 
 	app := fiber.New(fiber.Config{
 		BodyLimit:    config.Configuration.Server.MaxUploadSize * 1024 * 1024,

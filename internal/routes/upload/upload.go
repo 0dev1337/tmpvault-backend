@@ -24,6 +24,17 @@ import (
 // unresponsive database can't hang a request indefinitely.
 const mongoOpTimeout = 10 * time.Second
 
+// incomingDir returns (creating if needed) the scratch directory used for
+// in-progress uploads (both the direct and chunked paths), so finalizeUpload
+// can always os.Rename out of it into place on the same filesystem.
+func incomingDir() (string, error) {
+	dir := filepath.Join(config.Configuration.Storage.Path, ".incoming")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", err
+	}
+	return dir, nil
+}
+
 // hasFreeDiskSpace reports whether dir's filesystem has at least needed bytes
 // free, so a large upload fails fast with a clear error instead of partway
 // through a long write.
@@ -36,7 +47,91 @@ func hasFreeDiskSpace(dir string, needed int64) (bool, error) {
 	return free >= uint64(needed), nil
 }
 
-// UploadHandler accepts multipart file upload and stores metadata in MongoDB.
+// finalizeUpload dedupes a fully-written temp file against existing uploads
+// by fingerprint, moves it into its expiry directory (or discards it as a
+// duplicate), and persists its metadata. Shared by the direct and chunked
+// upload paths once each has produced a complete temp file and its hash.
+func finalizeUpload(tempPath, originalName, generatedName, expirySubdir, expiry string, expiryUnix int64, fingerprint string) (UploadResponse, int) {
+	ctx, cancel := context.WithTimeout(context.Background(), mongoOpTimeout)
+	defer cancel()
+
+	existing, err := database.FindUploadByFingerprint(ctx, fingerprint)
+	if err == nil {
+		_ = os.Remove(tempPath)
+		return UploadResponse{ID: existing.FileID, Status: "success"}, fiber.StatusOK
+	}
+	if !errors.Is(err, mongodriver.ErrNoDocuments) {
+		logging.Logger.Error().Err(err).Msg("fingerprint lookup")
+		_ = os.Remove(tempPath)
+		return UploadResponse{Status: "error", Error: "failed to check existing upload"}, fiber.StatusInternalServerError
+	}
+
+	finalDir := filepath.Join(config.Configuration.Storage.Path, expirySubdir)
+	if err := os.MkdirAll(finalDir, 0o755); err != nil {
+		logging.Logger.Error().Err(err).Msg("create storage directory")
+		_ = os.Remove(tempPath)
+		return UploadResponse{Status: "error", Error: "failed to create storage directory"}, fiber.StatusInternalServerError
+	}
+
+	finalPath := filepath.Join(finalDir, generatedName)
+	if err := os.Rename(tempPath, finalPath); err != nil {
+		logging.Logger.Error().Err(err).Msg("move upload into place")
+		_ = os.Remove(tempPath)
+		return UploadResponse{Status: "error", Error: "failed to save file"}, fiber.StatusInternalServerError
+	}
+
+	rec := database.UploadRecord{
+		FileID:      generatedName,
+		FileName:    originalName,
+		FilePath:    finalPath,
+		Expiry:      expiryUnix,
+		Fingerprint: fingerprint,
+	}
+	if err := database.SaveUpload(ctx, rec); err != nil {
+		logging.Logger.Error().Err(err).Msg("persist upload metadata")
+		_ = os.Remove(finalPath)
+		return UploadResponse{Status: "error", Error: "failed to save upload metadata"}, fiber.StatusInternalServerError
+	}
+
+	return UploadResponse{ID: generatedName, Expiry: expiry, Status: "success"}, fiber.StatusOK
+}
+
+// parseFileNameLength reads and validates the optional file_name_length form value.
+func parseFileNameLength(c fiber.Ctx) (int, error) {
+	raw := c.FormValue("file_name_length")
+	if raw == "" {
+		return 0, nil
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil || n < 1 {
+		return 0, errors.New("file_name_length must be a positive integer")
+	}
+	return n, nil
+}
+
+// resolveExpiry reads the expiry form value (defaulting to 24h) and resolves
+// it to its storage subdirectory and absolute expiry timestamp.
+func resolveExpiry(c fiber.Ctx) (expiry, subdir string, expiryUnix int64, err error) {
+	expiry = c.FormValue("expiry")
+	if expiry == "" {
+		expiry = "24h"
+	}
+	subdir, ok := config.Configuration.Expiry[expiry]
+	if !ok {
+		return "", "", 0, errors.New("unknown expiry option")
+	}
+	expiryUnix, err = helpers.ExpiryToUnix(expiry)
+	if err != nil {
+		return "", "", 0, errors.New("invalid expiry value")
+	}
+	return expiry, subdir, expiryUnix, nil
+}
+
+// UploadHandler accepts a single-request multipart file upload and stores
+// metadata in MongoDB. Suitable for files small enough to fit in one HTTP
+// request (notably under any reverse proxy's max body size, e.g. Cloudflare's
+// plan-based cap); larger files should use the chunked init/chunk/complete
+// flow instead.
 func UploadHandler(c fiber.Ctx) error {
 	file, err := c.FormFile("file")
 	if err != nil {
@@ -47,17 +142,9 @@ func UploadHandler(c fiber.Ctx) error {
 	}
 
 	originalName := file.Filename
-	fileNameLength := 0
-	fileNameLengthRaw := c.FormValue("file_name_length")
-	if fileNameLengthRaw != "" {
-		parsedLength, err := strconv.Atoi(fileNameLengthRaw)
-		if err != nil || parsedLength < 1 {
-			return c.Status(fiber.StatusBadRequest).JSON(UploadResponse{
-				Status: "error",
-				Error:  "file_name_length must be a positive integer",
-			})
-		}
-		fileNameLength = parsedLength
+	fileNameLength, err := parseFileNameLength(c)
+	if err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(UploadResponse{Status: "error", Error: err.Error()})
 	}
 
 	generatedName, err := helpers.GenFileNameWithLength(file.Filename, fileNameLength)
@@ -67,41 +154,22 @@ func UploadHandler(c fiber.Ctx) error {
 			Error:  err.Error(),
 		})
 	}
-	file.Filename = generatedName
 
-	expiry := c.FormValue("expiry")
-	if expiry == "" {
-		expiry = "24h"
-	}
-	expirySubdir, ok := config.Configuration.Expiry[expiry]
-	if !ok {
-		return c.Status(fiber.StatusBadRequest).JSON(UploadResponse{
-			Status: "error",
-			Error:  "unknown expiry option",
-		})
-	}
-
-	expiryUnix, err := helpers.ExpiryToUnix(expiry)
+	expiry, expirySubdir, expiryUnix, err := resolveExpiry(c)
 	if err != nil {
-		return c.Status(fiber.StatusBadRequest).JSON(UploadResponse{
-			Status: "error",
-			Error:  "invalid expiry value",
-		})
+		return c.Status(fiber.StatusBadRequest).JSON(UploadResponse{Status: "error", Error: err.Error()})
 	}
 
-	base := config.Configuration.Storage.Path
-	saveDir := filepath.Join(base, expirySubdir)
-	savePath := filepath.Join(saveDir, file.Filename)
-
-	if err := os.MkdirAll(saveDir, 0o755); err != nil {
-		logging.Logger.Error().Err(err).Msg("create storage directory")
+	dir, err := incomingDir()
+	if err != nil {
+		logging.Logger.Error().Err(err).Msg("create incoming directory")
 		return c.Status(fiber.StatusInternalServerError).JSON(UploadResponse{
 			Status: "error",
 			Error:  "failed to create storage directory",
 		})
 	}
 
-	if ok, err := hasFreeDiskSpace(saveDir, file.Size); err != nil {
+	if ok, err := hasFreeDiskSpace(dir, file.Size); err != nil {
 		logging.Logger.Error().Err(err).Msg("check free disk space")
 	} else if !ok {
 		return c.Status(fiber.StatusInsufficientStorage).JSON(UploadResponse{
@@ -109,6 +177,8 @@ func UploadHandler(c fiber.Ctx) error {
 			Error:  "not enough storage space available",
 		})
 	}
+
+	tempPath := filepath.Join(dir, generatedName+".part")
 
 	src, err := file.Open()
 	if err != nil {
@@ -120,7 +190,7 @@ func UploadHandler(c fiber.Ctx) error {
 	}
 	defer src.Close()
 
-	dst, err := os.Create(savePath)
+	dst, err := os.Create(tempPath)
 	if err != nil {
 		logging.Logger.Error().Err(err).Msg("create upload file")
 		return c.Status(fiber.StatusInternalServerError).JSON(UploadResponse{
@@ -132,7 +202,7 @@ func UploadHandler(c fiber.Ctx) error {
 	h := sha256.New()
 	if _, err := io.Copy(io.MultiWriter(dst, h), src); err != nil {
 		_ = dst.Close()
-		_ = os.Remove(savePath)
+		_ = os.Remove(tempPath)
 		logging.Logger.Error().Err(err).Msg("save upload")
 		return c.Status(fiber.StatusInternalServerError).JSON(UploadResponse{
 			Status: "error",
@@ -140,7 +210,7 @@ func UploadHandler(c fiber.Ctx) error {
 		})
 	}
 	if err := dst.Close(); err != nil {
-		_ = os.Remove(savePath)
+		_ = os.Remove(tempPath)
 		logging.Logger.Error().Err(err).Msg("close upload file")
 		return c.Status(fiber.StatusInternalServerError).JSON(UploadResponse{
 			Status: "error",
@@ -149,45 +219,6 @@ func UploadHandler(c fiber.Ctx) error {
 	}
 
 	fingerprint := hex.EncodeToString(h.Sum(nil))
-	ctx, cancel := context.WithTimeout(context.Background(), mongoOpTimeout)
-	defer cancel()
-
-	existing, err := database.FindUploadByFingerprint(ctx, fingerprint)
-	if err == nil {
-		_ = os.Remove(savePath)
-		return c.Status(fiber.StatusOK).JSON(UploadResponse{
-			ID:     existing.FileID,
-			Status: "success",
-		})
-	}
-	if !errors.Is(err, mongodriver.ErrNoDocuments) {
-		logging.Logger.Error().Err(err).Msg("fingerprint lookup")
-		_ = os.Remove(savePath)
-		return c.Status(fiber.StatusInternalServerError).JSON(UploadResponse{
-			Status: "error",
-			Error:  "failed to check existing upload",
-		})
-	}
-
-	rec := database.UploadRecord{
-		FileID:      file.Filename,
-		FileName:    originalName,
-		FilePath:    savePath,
-		Expiry:      expiryUnix,
-		Fingerprint: fingerprint,
-	}
-	if err := database.SaveUpload(ctx, rec); err != nil {
-		logging.Logger.Error().Err(err).Msg("persist upload metadata")
-		_ = os.Remove(savePath)
-		return c.Status(fiber.StatusInternalServerError).JSON(UploadResponse{
-			Status: "error",
-			Error:  "failed to save upload metadata",
-		})
-	}
-
-	return c.Status(fiber.StatusOK).JSON(UploadResponse{
-		ID:     file.Filename,
-		Expiry: expiry,
-		Status: "success",
-	})
+	resp, status := finalizeUpload(tempPath, originalName, generatedName, expirySubdir, expiry, expiryUnix, fingerprint)
+	return c.Status(status).JSON(resp)
 }

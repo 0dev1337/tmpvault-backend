@@ -14,6 +14,7 @@ type Server struct {
 	ReadTimeout   int    `toml:"read_timeout_seconds"`
 	WriteTimeout  int    `toml:"write_timeout_seconds"`
 	IdleTimeout   int    `toml:"idle_timeout_seconds"`
+	ChunkSize     int    `toml:"chunk_size_mb"`
 }
 
 type Storage struct {
