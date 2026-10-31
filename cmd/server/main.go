@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/0dev1337/tmpvault-backend/internal/config"
 	"github.com/0dev1337/tmpvault-backend/internal/middleware"
@@ -16,6 +17,14 @@ import (
 	"github.com/gofiber/fiber/v3"
 	"github.com/gofiber/fiber/v3/middleware/cors"
 )
+
+// secondsOrDefault returns d (as a Duration) when seconds <= 0.
+func secondsOrDefault(seconds int, d time.Duration) time.Duration {
+	if seconds <= 0 {
+		return d
+	}
+	return time.Duration(seconds) * time.Second
+}
 
 func main() {
 	if err := config.LoadConfig(); err != nil {
@@ -31,7 +40,10 @@ func main() {
 	go service.RunCleanupWorker(ctx)
 
 	app := fiber.New(fiber.Config{
-		BodyLimit: config.Configuration.Server.MaxUploadSize * 1024 * 1024,
+		BodyLimit:    config.Configuration.Server.MaxUploadSize * 1024 * 1024,
+		ReadTimeout:  secondsOrDefault(config.Configuration.Server.ReadTimeout, 15*time.Minute),
+		WriteTimeout: secondsOrDefault(config.Configuration.Server.WriteTimeout, 60*time.Second),
+		IdleTimeout:  secondsOrDefault(config.Configuration.Server.IdleTimeout, 60*time.Second),
 	})
 	app.Use(middleware.Logging)
 	app.Use(cors.New(cors.Config{

@@ -9,6 +9,8 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"syscall"
+	"time"
 
 	"github.com/0dev1337/tmpvault-backend/internal/config"
 	"github.com/0dev1337/tmpvault-backend/internal/database"
@@ -17,6 +19,22 @@ import (
 	"github.com/gofiber/fiber/v3"
 	mongodriver "go.mongodb.org/mongo-driver/mongo"
 )
+
+// mongoOpTimeout bounds each Mongo call made during an upload so a slow or
+// unresponsive database can't hang a request indefinitely.
+const mongoOpTimeout = 10 * time.Second
+
+// hasFreeDiskSpace reports whether dir's filesystem has at least needed bytes
+// free, so a large upload fails fast with a clear error instead of partway
+// through a long write.
+func hasFreeDiskSpace(dir string, needed int64) (bool, error) {
+	var stat syscall.Statfs_t
+	if err := syscall.Statfs(dir, &stat); err != nil {
+		return false, err
+	}
+	free := stat.Bavail * uint64(stat.Bsize)
+	return free >= uint64(needed), nil
+}
 
 // UploadHandler accepts multipart file upload and stores metadata in MongoDB.
 func UploadHandler(c fiber.Ctx) error {
@@ -83,6 +101,15 @@ func UploadHandler(c fiber.Ctx) error {
 		})
 	}
 
+	if ok, err := hasFreeDiskSpace(saveDir, file.Size); err != nil {
+		logging.Logger.Error().Err(err).Msg("check free disk space")
+	} else if !ok {
+		return c.Status(fiber.StatusInsufficientStorage).JSON(UploadResponse{
+			Status: "error",
+			Error:  "not enough storage space available",
+		})
+	}
+
 	src, err := file.Open()
 	if err != nil {
 		logging.Logger.Error().Err(err).Msg("open upload")
@@ -122,7 +149,8 @@ func UploadHandler(c fiber.Ctx) error {
 	}
 
 	fingerprint := hex.EncodeToString(h.Sum(nil))
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), mongoOpTimeout)
+	defer cancel()
 
 	existing, err := database.FindUploadByFingerprint(ctx, fingerprint)
 	if err == nil {

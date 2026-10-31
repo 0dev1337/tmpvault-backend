@@ -2,6 +2,9 @@
 host = "0.0.0.0"
 port = 8080
 max_upload_limit = 400
+read_timeout_seconds = 900
+write_timeout_seconds = 60
+idle_timeout_seconds = 60
 
 [storage]
 base_path = "./storage/uploads"
